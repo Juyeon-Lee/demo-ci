@@ -60,7 +60,7 @@ production 에는 required reviewers(승인 후 배포) 를 걸 수도 있다.
 
 ## 4. EC2 / systemd 쪽
 
-단일 서버에 환경 하나만 돌리면: 지금처럼 `/opt/demo-ci` + `env.conf` 교체만으로도 충분.
+단일 서버에 환경 하나만 돌리면: 지금처럼 `/home/ec2-user/service/demo-ci` + `env.conf` 교체만으로도 충분.
 
 서버를 둘로 나누면:
 
@@ -70,7 +70,7 @@ production 에는 required reviewers(승인 후 배포) 를 걸 수도 있다.
 한 서버에 두 환경을 같이 올릴 경우(비권장·학습용):
 
 - 유닛 이름 분리: `demo-ci-test.service`, `demo-ci-prod.service`
-- 경로·포트 분리: `/opt/demo-ci-test`, 포트 8080 / 8081
+- 경로·포트 분리: `/home/ec2-user/service/demo-ci-test`, 포트 8080 / 8081
 
 ---
 

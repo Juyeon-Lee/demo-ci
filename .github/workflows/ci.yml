@@ -1,6 +1,7 @@
 # This workflow builds a Java Maven project and deploys jar + config to EC2.
 # 환경(test/production) 분리는 하지 않음 → 저장소 루트 environment.md 참고
 # SSH: ec2-user + PEM 키(GitHub Secrets EC2_SSH_KEY)
+# 앱 경로: /home/ec2-user/service/demo-ci
 # systemd 유닛(demo-ci.service)은 EC2 에 이미 있다고 가정
 
 name: Java CI/CD with Maven
@@ -15,10 +16,10 @@ jobs:
   build:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
 
       - name: Set up JDK 21
-        uses: actions/setup-java@v4
+        uses: actions/setup-java@v5
         with:
           java-version: '21'
           distribution: 'temurin'
@@ -28,7 +29,7 @@ jobs:
         run: mvn -B package --file pom.xml
 
       - name: Upload build artifact
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v6
         with:
           name: app-jar
           path: target/*.jar
@@ -41,10 +42,10 @@ jobs:
     if: github.event_name == 'push' && github.ref == 'refs/heads/main'
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
 
       - name: Download build artifact
-        uses: actions/download-artifact@v4
+        uses: actions/download-artifact@v7
         with:
           name: app-jar
           path: artifacts
@@ -59,7 +60,16 @@ jobs:
           cp deploy/env.conf release/env.conf
           ls -la release
 
-      # 로컬 예: scp -i key.pem release/* ec2-user@{IP}:~/demo-ci/
+      # 홈 아래라 ec2-user 가 바로 쓸 수 있음 → 추가 cp 없음
+      - name: Ensure app directory on EC2
+        uses: appleboy/ssh-action@v1.2.0
+        with:
+          host: ${{ secrets.EC2_HOST }}
+          username: ec2-user
+          key: ${{ secrets.EC2_SSH_KEY }}
+          port: ${{ secrets.EC2_PORT || 22 }}
+          script: mkdir -p ~/service/demo-ci
+
       - name: Copy files to EC2
         uses: appleboy/scp-action@v0.1.7
         with:
@@ -68,10 +78,10 @@ jobs:
           key: ${{ secrets.EC2_SSH_KEY }}
           port: ${{ secrets.EC2_PORT || 22 }}
           source: "release/*"
-          target: ~/demo-ci
+          target: ~/service/demo-ci
           strip_components: 1
 
-      - name: Install files and restart systemd
+      - name: Restart systemd
         uses: appleboy/ssh-action@v1.2.0
         with:
           host: ${{ secrets.EC2_HOST }}
@@ -80,10 +90,5 @@ jobs:
           port: ${{ secrets.EC2_PORT || 22 }}
           script: |
             set -euo pipefail
-            sudo mkdir -p /opt/demo-ci/current /opt/demo-ci/conf
-            sudo cp ~/demo-ci/app.jar /opt/demo-ci/current/app.jar
-            sudo cp ~/demo-ci/application.yml /opt/demo-ci/current/application.yml
-            sudo cp ~/demo-ci/env.conf /opt/demo-ci/conf/env.conf
-            sudo chown -R ec2-user:ec2-user /opt/demo-ci
             sudo systemctl restart demo-ci.service
             sudo systemctl --no-pager --full status demo-ci.service || true

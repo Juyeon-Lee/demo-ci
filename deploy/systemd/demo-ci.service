@@ -6,10 +6,10 @@ Wants=network-online.target
 [Service]
 Type=simple
 User=ec2-user
-WorkingDirectory=/opt/demo-ci/current
-EnvironmentFile=-/opt/demo-ci/conf/env.conf
-# JVM 옵션은 env.conf 의 JAVA_TOOL_OPTIONS 로 전달 (shell 래퍼 불필요)
-ExecStart=/usr/bin/java -jar /opt/demo-ci/current/app.jar
+WorkingDirectory=/home/ec2-user/service/demo-ci
+EnvironmentFile=-/home/ec2-user/service/demo-ci/env.conf
+# JVM 옵션은 env.conf 의 JAVA_TOOL_OPTIONS 로 전달
+ExecStart=/usr/bin/java -jar /home/ec2-user/service/demo-ci/app.jar
 Restart=on-failure
 RestartSec=5
 TimeoutStopSec=30
