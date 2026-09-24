@@ -1,0 +1,23 @@
+[Unit]
+Description=demo-ci Spring Boot Application
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=ec2-user
+WorkingDirectory=/opt/demo-ci/current
+EnvironmentFile=-/opt/demo-ci/conf/env.conf
+# JVM 옵션은 env.conf 의 JAVA_TOOL_OPTIONS 로 전달 (shell 래퍼 불필요)
+ExecStart=/usr/bin/java -jar /opt/demo-ci/current/app.jar
+Restart=on-failure
+RestartSec=5
+TimeoutStopSec=30
+KillMode=mixed
+SuccessExitStatus=143
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=demo-ci
+
+[Install]
+WantedBy=multi-user.target

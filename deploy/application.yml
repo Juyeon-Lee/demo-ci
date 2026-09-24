@@ -1,0 +1,13 @@
+# 단일 환경용 외부 설정 (EC2 에 jar 와 함께 배포)
+
+spring:
+  application:
+    name: demo-ci
+
+server:
+  port: ${SERVER_PORT:8080}
+
+logging:
+  level:
+    root: INFO
+    com.example.democi: DEBUG
