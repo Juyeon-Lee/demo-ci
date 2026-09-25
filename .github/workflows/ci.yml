@@ -1,8 +1,7 @@
-# This workflow builds a Java Maven project and deploys jar + config to EC2.
-# 환경(test/production) 분리는 하지 않음 → 저장소 루트 environment.md 참고
-# SSH: ec2-user + PEM 키(GitHub Secrets EC2_SSH_KEY)
+# CI: Maven 빌드 / CD: main 푸시 시 EC2 배포
+# Secrets: EC2_HOST, EC2_SSH_KEY (pem 내용), (선택) EC2_PORT
 # 앱 경로: /home/ec2-user/service/demo-ci
-# systemd 유닛(demo-ci.service)은 EC2 에 이미 있다고 가정
+# 환경 분리(test/prod) → environment.md
 
 name: Java CI/CD with Maven
 
@@ -13,6 +12,7 @@ on:
     branches: [ main ]
 
 jobs:
+  # --- CI: 빌드만 (PR + push 공통) ---
   build:
     runs-on: ubuntu-latest
     steps:
@@ -28,6 +28,7 @@ jobs:
       - name: Build with Maven
         run: mvn -B package --file pom.xml
 
+      # deploy job 이 받을 수 있게 jar 보관
       - name: Upload build artifact
         uses: actions/upload-artifact@v6
         with:
@@ -36,7 +37,7 @@ jobs:
           if-no-files-found: error
           retention-days: 7
 
-  # main 에 push 될 때만 EC2 배포
+  # --- CD: main 푸시일 때만 EC2 배포 (PR 에서는 스킵) ---
   deploy:
     needs: build
     if: github.event_name == 'push' && github.ref == 'refs/heads/main'
@@ -50,6 +51,7 @@ jobs:
           name: app-jar
           path: artifacts
 
+      # *-plain.jar 제외 = Spring Boot 실행용 jar 만 선택
       - name: Prepare files to copy
         run: |
           set -euo pipefail
@@ -58,9 +60,10 @@ jobs:
           cp "${JAR}" release/app.jar
           cp deploy/application.yml release/application.yml
           cp deploy/env.conf release/env.conf
+          cp deploy/systemd/demo-ci.service release/demo-ci.service
           ls -la release
 
-      # 홈 아래라 ec2-user 가 바로 쓸 수 있음 → 추가 cp 없음
+      # SSH: username 은 Amazon Linux 기본 계정 ec2-user 고정
       - name: Ensure app directory on EC2
         uses: appleboy/ssh-action@v1.2.0
         with:
@@ -70,6 +73,7 @@ jobs:
           port: ${{ secrets.EC2_PORT || 22 }}
           script: mkdir -p ~/service/demo-ci
 
+      # 홈 아래라 ec2-user 가 바로 씀 (sudo cp 불필요)
       - name: Copy files to EC2
         uses: appleboy/scp-action@v0.1.7
         with:
@@ -81,7 +85,8 @@ jobs:
           target: ~/service/demo-ci
           strip_components: 1
 
-      - name: Restart systemd
+      # 유닛 설치 → restart → is-active 실패 시 CD 실패 처리
+      - name: Install unit and restart
         uses: appleboy/ssh-action@v1.2.0
         with:
           host: ${{ secrets.EC2_HOST }}
@@ -90,5 +95,13 @@ jobs:
           port: ${{ secrets.EC2_PORT || 22 }}
           script: |
             set -euo pipefail
+            ls -la ~/service/demo-ci
+            command -v java
+            java -version
+            sudo cp ~/service/demo-ci/demo-ci.service /etc/systemd/system/demo-ci.service
+            sudo systemctl daemon-reload
+            sudo systemctl enable demo-ci.service
             sudo systemctl restart demo-ci.service
-            sudo systemctl --no-pager --full status demo-ci.service || true
+            sleep 3
+            sudo systemctl --no-pager --full status demo-ci.service
+            sudo systemctl is-active demo-ci.service
