@@ -1,7 +1,11 @@
-# CI: Maven 빌드 / CD: main 푸시 시 EC2 배포
-# Secrets: EC2_HOST, EC2_SSH_KEY (pem 내용), (선택) EC2_PORT
+# CI: Maven 빌드 → artifact
+# CD: artifact 로 Docker 이미지 빌드/ECR 푸시 → EC2 컨테이너 배포
+# Secrets:
+#   AWS_ACCESS_KEY_ID, AWS_SECRET_ACCESS_KEY, AWS_REGION, ECR_REPOSITORY
+#   EC2_HOST, EC2_SSH_KEY, (선택) EC2_PORT
 # 앱 경로: /home/ec2-user/service/demo-ci
 # 환경 분리(test/prod) → environment.md
+# 참고: https://github.com/Rookie0031/sample-server/blob/master/.github/workflows/ci.yml
 
 name: Java CI/CD with Maven
 
@@ -28,7 +32,6 @@ jobs:
       - name: Build with Maven
         run: mvn -B package --file pom.xml
 
-      # deploy job 이 받을 수 있게 jar 보관
       - name: Upload build artifact
         uses: actions/upload-artifact@v6
         with:
@@ -37,11 +40,14 @@ jobs:
           if-no-files-found: error
           retention-days: 7
 
-  # --- CD: main 푸시일 때만 EC2 배포 (PR 에서는 스킵) ---
-  deploy:
+  # --- Docker: artifact jar 로 이미지 빌드 후 ECR 푸시 (main 만) ---
+  docker:
     needs: build
     if: github.event_name == 'push' && github.ref == 'refs/heads/main'
     runs-on: ubuntu-latest
+    outputs:
+      image_tag: ${{ steps.meta.outputs.image_tag }}
+      image_uri: ${{ steps.meta.outputs.image_uri }}
     steps:
       - uses: actions/checkout@v5
 
@@ -51,19 +57,67 @@ jobs:
           name: app-jar
           path: artifacts
 
-      # *-plain.jar 제외 = Spring Boot 실행용 jar 만 선택
-      - name: Prepare files to copy
+      - name: Prepare docker context
+        run: |
+          set -euo pipefail
+          mkdir -p docker-context
+          JAR="$(find artifacts -name '*.jar' ! -name '*-plain.jar' | head -n 1)"
+          test -n "${JAR}"
+          cp "${JAR}" docker-context/app.jar
+          cp Dockerfile docker-context/Dockerfile
+          ls -la docker-context
+
+      - name: Configure AWS credentials
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
+          aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+          aws-region: ${{ secrets.AWS_REGION }}
+
+      - name: Login to Amazon ECR
+        id: login-ecr
+        uses: aws-actions/amazon-ecr-login@v2
+
+      - name: Set image tag and URI
+        id: meta
+        run: |
+          set -euo pipefail
+          IMAGE_TAG="${GITHUB_SHA}"
+          IMAGE_URI="${{ steps.login-ecr.outputs.registry }}/${{ secrets.ECR_REPOSITORY }}"
+          echo "image_tag=${IMAGE_TAG}" >> "$GITHUB_OUTPUT"
+          echo "image_uri=${IMAGE_URI}" >> "$GITHUB_OUTPUT"
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Build and push
+        uses: docker/build-push-action@v6
+        with:
+          context: docker-context
+          file: docker-context/Dockerfile
+          push: true
+          tags: |
+            ${{ steps.meta.outputs.image_uri }}:latest
+            ${{ steps.meta.outputs.image_uri }}:${{ steps.meta.outputs.image_tag }}
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+
+  # --- CD: EC2 에서 ECR pull + 컨테이너 재기동 (main 만) ---
+  deploy:
+    needs: docker
+    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+
+      - name: Prepare config files
         run: |
           set -euo pipefail
           mkdir -p release
-          JAR="$(find artifacts -name '*.jar' ! -name '*-plain.jar' | head -n 1)"
-          cp "${JAR}" release/app.jar
           cp deploy/application.yml release/application.yml
           cp deploy/env.conf release/env.conf
-          cp deploy/systemd/demo-ci.service release/demo-ci.service
           ls -la release
 
-      # SSH: username 은 Amazon Linux 기본 계정 ec2-user 고정
       - name: Ensure app directory on EC2
         uses: appleboy/ssh-action@v1.2.0
         with:
@@ -71,10 +125,9 @@ jobs:
           username: ec2-user
           key: ${{ secrets.EC2_SSH_KEY }}
           port: ${{ secrets.EC2_PORT || 22 }}
-          script: mkdir -p ~/service/demo-ci
+          script: mkdir -p ~/service/demo-ci/data ~/.aws
 
-      # 홈 아래라 ec2-user 가 바로 씀 (sudo cp 불필요)
-      - name: Copy files to EC2
+      - name: Copy config to EC2
         uses: appleboy/scp-action@v0.1.7
         with:
           host: ${{ secrets.EC2_HOST }}
@@ -85,23 +138,56 @@ jobs:
           target: ~/service/demo-ci
           strip_components: 1
 
-      # 유닛 설치 → restart → is-active 실패 시 CD 실패 처리
-      - name: Install unit and restart
+      - name: Pull image and restart container
         uses: appleboy/ssh-action@v1.2.0
+        env:
+          AWS_ACCESS_KEY_ID: ${{ secrets.AWS_ACCESS_KEY_ID }}
+          AWS_SECRET_ACCESS_KEY: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+          AWS_REGION: ${{ secrets.AWS_REGION }}
+          IMAGE_REF: ${{ needs.docker.outputs.image_uri }}:${{ needs.docker.outputs.image_tag }}
         with:
           host: ${{ secrets.EC2_HOST }}
           username: ec2-user
           key: ${{ secrets.EC2_SSH_KEY }}
           port: ${{ secrets.EC2_PORT || 22 }}
+          envs: AWS_ACCESS_KEY_ID,AWS_SECRET_ACCESS_KEY,AWS_REGION,IMAGE_REF
           script: |
             set -euo pipefail
-            ls -la ~/service/demo-ci
-            command -v java
-            java -version
-            sudo cp ~/service/demo-ci/demo-ci.service /etc/systemd/system/demo-ci.service
-            sudo systemctl daemon-reload
-            sudo systemctl enable demo-ci.service
-            sudo systemctl restart demo-ci.service
+
+            # 이전 jar+systemd 방식과 충돌 방지
+            if systemctl list-unit-files | grep -q '^demo-ci\.service'; then
+              sudo systemctl stop demo-ci.service || true
+              sudo systemctl disable demo-ci.service || true
+            fi
+
+            # EC2 에서 ECR 로그인 (sample-server 와 동일 패턴)
+            mkdir -p ~/.aws
+            printf '%s\n' \
+              '[default]' \
+              "aws_access_key_id=${AWS_ACCESS_KEY_ID}" \
+              "aws_secret_access_key=${AWS_SECRET_ACCESS_KEY}" \
+              "region=${AWS_REGION}" > ~/.aws/credentials
+
+            ECR_REGISTRY="$(echo "${IMAGE_REF}" | cut -d/ -f1)"
+            aws ecr get-login-password --region "${AWS_REGION}" \
+              | docker login --username AWS --password-stdin "${ECR_REGISTRY}"
+
+            docker pull "${IMAGE_REF}"
+
+            docker stop demo-ci 2>/dev/null || true
+            docker rm demo-ci 2>/dev/null || true
+
+            docker run -d \
+              --name demo-ci \
+              --restart unless-stopped \
+              -p 8080:8080 \
+              -v /home/ec2-user/service/demo-ci/data:/app/data \
+              -v /home/ec2-user/service/demo-ci/application.yml:/app/config/application.yml:ro \
+              --env-file /home/ec2-user/service/demo-ci/env.conf \
+              -e SPRING_CONFIG_ADDITIONAL_LOCATION=optional:file:/app/config/application.yml \
+              "${IMAGE_REF}"
+
             sleep 3
-            sudo systemctl --no-pager --full status demo-ci.service
-            sudo systemctl is-active demo-ci.service
+            docker ps --filter name=demo-ci --format 'table {{.Names}}\t{{.Status}}\t{{.Image}}'
+            docker inspect -f '{{.State.Running}}' demo-ci | grep -qx true
+            docker image prune -f

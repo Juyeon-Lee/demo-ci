@@ -1,23 +1,13 @@
-# ---- build ----
-FROM maven:3.9.9-eclipse-temurin-21-alpine AS build
-WORKDIR /app
-
-COPY pom.xml .
-COPY src ./src
-
-RUN mvn -B -DskipTests package \
-    && find target -name '*.jar' ! -name '*-plain.jar' -exec cp {} /app/app.jar \;
-
-# ---- run ----
+# CI에서 Maven 으로 만든 jar 를 그대로 사용 (이미지 안에서 재빌드하지 않음)
 FROM eclipse-temurin:21-jre-alpine
 WORKDIR /app
 
 RUN mkdir -p /app/data
 
-COPY --from=build /app/app.jar app.jar
+COPY app.jar app.jar
 
 EXPOSE 8080
 
 VOLUME ["/app/data"]
 
-ENTRYPOINT ["java", "-jar", "app.jar"]
+CMD ["java", "-jar", "app.jar"]
