@@ -1,0 +1,17 @@
+.git
+.github
+.idea
+.vscode
+target
+data
+*.iml
+*.iws
+*.ipr
+*.md
+deploy
+.gitattributes
+.gitignore
+**/mvnw
+**/mvnw.cmd
+.mvn
+src/test
