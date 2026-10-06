@@ -210,23 +210,67 @@ jobs:
             cd /home/ec2-user/service/demo-ci
             printf 'IMAGE_REF=%s\n' "${IMAGE_REF}" > .env
 
-            # 예전 docker run 컨테이너와 이름/포트가 겹치지 않게 제거
-            docker rm -f demo-ci 2>/dev/null || true
+            free_port_8080() {
+              id=""
+              for id in $(docker ps -q); do
+                if docker port "$id" 2>/dev/null | grep -qE ':8080([^0-9]|$)'; then
+                  echo "remove container on 8080: $(docker ps --filter "id=${id}" --format '{{.Names}}')"
+                  docker rm -f "$id" || true
+                fi
+              done
 
-            # 이름이 달라도 호스트 8080 을 쓰는 컨테이너가 있으면 제거
-            OLD_IDS="$(docker ps -aq --filter publish=8080)"
-            if [ -n "${OLD_IDS}" ]; then
-              docker rm -f ${OLD_IDS}
-            fi
+              if command -v ss >/dev/null 2>&1; then
+                pids="$(sudo ss -tlnp | grep -E ':8080([^0-9]|$)' | grep -oE 'pid=[0-9]+' | cut -d= -f2 | sort -u || true)"
+                if [ -n "${pids}" ]; then
+                  echo "kill process on 8080: ${pids}"
+                  sudo ss -tlnp | grep -E ':8080([^0-9]|$)' || true
+                  sudo kill -9 ${pids} || true
+                fi
+              fi
 
-            # jar+systemd 등 컨테이너가 아닌 프로세스가 8080 을 점유 중이면 종료
-            if command -v ss >/dev/null 2>&1 && ss -tln | grep -q ':8080'; then
-              sudo fuser -k 8080/tcp 2>/dev/null || true
+              if command -v fuser >/dev/null 2>&1; then
+                sudo fuser -k 8080/tcp || true
+              fi
               sleep 1
-            fi
+            }
 
-            # compose.yml: app + mysql, demo-net, mysql-data 볼륨
-            docker compose up -d --remove-orphans
+            stop_legacy_service() {
+              if systemctl list-unit-files | grep -q '^demo-ci\.service'; then
+                sudo systemctl stop demo-ci.service || true
+                sudo systemctl disable demo-ci.service || true
+              fi
+            }
+
+            # MySQL 이 healthy 된 뒤에야 앱이 8080 을 연다.
+            # 그 직전에 예전 컨테이너와 호스트 프로세스를 다시 비운다.
+            stop_legacy_service
+            docker rm -f demo-ci 2>/dev/null || true
+            free_port_8080
+
+            docker compose up -d --remove-orphans mysql
+
+            mysql_status=""
+            i=0
+            while [ "$i" -lt 40 ]; do
+              mysql_status="$(docker inspect -f '{{if .State.Health}}{{.State.Health.Status}}{{else}}none{{end}}' demo-ci-mysql 2>/dev/null || true)"
+              if [ "$mysql_status" = "healthy" ]; then
+                break
+              fi
+              i=$((i + 1))
+              sleep 3
+            done
+            test "$mysql_status" = "healthy"
+
+            stop_legacy_service
+            docker rm -f demo-ci 2>/dev/null || true
+            free_port_8080
+
+            if ! docker compose up -d --remove-orphans app; then
+              echo "8080 is still in use"
+              sudo ss -tlnp | grep -E ':8080([^0-9]|$)' || true
+              docker ps -a --format 'table {{.Names}}\t{{.Status}}\t{{.Ports}}' || true
+              exit 1
+            fi
 
             ready=0
             for _ in 1 2 3 4 5 6 7 8 9 10 11 12 13 14 15; do
