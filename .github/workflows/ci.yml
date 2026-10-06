@@ -196,11 +196,22 @@ jobs:
             aws ecr get-login-password --region "${AWS_REGION}" \
               | docker login --username AWS --password-stdin "${ECR_REGISTRY}"
 
-            # 미리 groups 에 docker 추가되어야 함
             docker pull "${IMAGE_REF}"
 
-            docker stop demo-ci 2>/dev/null || true
-            docker rm demo-ci 2>/dev/null || true
+            # sample-server 와 같이 기존 컨테이너 강제 제거
+            docker rm -f demo-ci 2>/dev/null || true
+
+            # 이름이 달라도 호스트 8080 을 쓰는 컨테이너가 있으면 제거
+            OLD_IDS="$(docker ps -aq --filter publish=8080)"
+            if [ -n "${OLD_IDS}" ]; then
+              docker rm -f ${OLD_IDS}
+            fi
+
+            # jar+systemd 등 컨테이너가 아닌 프로세스가 8080 을 점유 중이면 종료
+            if command -v ss >/dev/null 2>&1 && ss -tln | grep -q ':8080'; then
+              sudo fuser -k 8080/tcp 2>/dev/null || true
+              sleep 1
+            fi
 
             docker run -d \
               --name demo-ci \
