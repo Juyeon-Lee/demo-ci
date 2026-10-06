@@ -196,6 +196,7 @@ jobs:
             aws ecr get-login-password --region "${AWS_REGION}" \
               | docker login --username AWS --password-stdin "${ECR_REGISTRY}"
 
+            # 미리 groups 에 docker 추가되어야 함
             docker pull "${IMAGE_REF}"
 
             docker stop demo-ci 2>/dev/null || true
