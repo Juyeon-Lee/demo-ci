@@ -172,6 +172,7 @@ jobs:
           username: ec2-user
           key: ${{ secrets.EC2_SSH_KEY }}
           port: ${{ secrets.EC2_PORT || 22 }}
+          #command_timeout: 20m
           script: |
             set -euo pipefail
 

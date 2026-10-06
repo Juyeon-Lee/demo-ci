@@ -36,12 +36,13 @@ services:
       MYSQL_ROOT_PASSWORD: demociroot
     volumes:
       - mysql-data:/var/lib/mysql
+    # root 는 localhost 소켓만 허용된다. TCP 127.0.0.1 은 democi 로 확인한다.
     healthcheck:
-      test: ["CMD", "mysqladmin", "ping", "-h", "127.0.0.1", "-uroot", "-pdemociroot"]
+      test: ["CMD", "mysql", "-h", "127.0.0.1", "-udemoci", "-pdemoci", "-e", "SELECT 1"]
       interval: 5s
       timeout: 5s
-      retries: 30
-      start_period: 30s
+      retries: 20
+      start_period: 60s
 
 networks:
   demo-net:
