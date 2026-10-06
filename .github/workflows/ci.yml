@@ -46,8 +46,8 @@ jobs:
     if: github.event_name == 'push' && github.ref == 'refs/heads/main'
     runs-on: ubuntu-latest
     outputs:
+      # secret 이 섞인 값은 job output 으로 넘기면 다음 job 에서 빈 문자열이 될 수 있음
       image_tag: ${{ steps.meta.outputs.image_tag }}
-      image_uri: ${{ steps.meta.outputs.image_uri }}
     steps:
       - uses: actions/checkout@v5
 
@@ -86,6 +86,8 @@ jobs:
           IMAGE_URI="${{ steps.login-ecr.outputs.registry }}/${{ secrets.ECR_REPOSITORY }}"
           echo "image_tag=${IMAGE_TAG}" >> "$GITHUB_OUTPUT"
           echo "image_uri=${IMAGE_URI}" >> "$GITHUB_OUTPUT"
+          echo "IMAGE_URI=${IMAGE_URI}"
+          echo "IMAGE_TAG=${IMAGE_TAG}"
 
       - name: Set up Docker Buildx
         uses: docker/setup-buildx-action@v3
@@ -109,6 +111,30 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v5
+
+      - name: Configure AWS credentials
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
+          aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+          aws-region: ${{ secrets.AWS_REGION }}
+
+      - name: Login to Amazon ECR
+        id: login-ecr
+        uses: aws-actions/amazon-ecr-login@v2
+
+      - name: Resolve image reference
+        id: image
+        run: |
+          set -euo pipefail
+          IMAGE_URI="${{ steps.login-ecr.outputs.registry }}/${{ secrets.ECR_REPOSITORY }}"
+          IMAGE_TAG="${{ needs.docker.outputs.image_tag }}"
+          IMAGE_REF="${IMAGE_URI}:${IMAGE_TAG}"
+          test -n "${{ steps.login-ecr.outputs.registry }}"
+          test -n "${IMAGE_TAG}"
+          echo "image_ref=${IMAGE_REF}" >> "$GITHUB_OUTPUT"
+          echo "ecr_registry=${{ steps.login-ecr.outputs.registry }}" >> "$GITHUB_OUTPUT"
+          echo "IMAGE_REF=${IMAGE_REF}"
 
       - name: Prepare config files
         run: |
@@ -138,8 +164,6 @@ jobs:
           target: ~/service/demo-ci
           strip_components: 1
 
-      # appleboy 는 step env 의 PORT/HOST 등과 충돌할 수 있어,
-      # 원격에 넘길 값은 script 안에 직접 넣는다 (env/envs 미사용).
       - name: Pull image and restart container
         uses: appleboy/ssh-action@v1.2.0
         with:
@@ -153,7 +177,8 @@ jobs:
             AWS_ACCESS_KEY_ID='${{ secrets.AWS_ACCESS_KEY_ID }}'
             AWS_SECRET_ACCESS_KEY='${{ secrets.AWS_SECRET_ACCESS_KEY }}'
             AWS_REGION='${{ secrets.AWS_REGION }}'
-            IMAGE_REF='${{ needs.docker.outputs.image_uri }}:${{ needs.docker.outputs.image_tag }}'
+            ECR_REGISTRY='${{ steps.image.outputs.ecr_registry }}'
+            IMAGE_REF='${{ steps.image.outputs.image_ref }}'
 
             # 이전 jar+systemd 방식과 충돌 방지
             if systemctl list-unit-files | grep -q '^demo-ci\.service'; then
@@ -161,7 +186,6 @@ jobs:
               sudo systemctl disable demo-ci.service || true
             fi
 
-            # EC2 에서 ECR 로그인 (sample-server 와 동일 패턴)
             mkdir -p ~/.aws
             printf '%s\n' \
               '[default]' \
@@ -169,7 +193,6 @@ jobs:
               "aws_secret_access_key=${AWS_SECRET_ACCESS_KEY}" \
               "region=${AWS_REGION}" > ~/.aws/credentials
 
-            ECR_REGISTRY="$(echo "${IMAGE_REF}" | cut -d/ -f1)"
             aws ecr get-login-password --region "${AWS_REGION}" \
               | docker login --username AWS --password-stdin "${ECR_REGISTRY}"
 
