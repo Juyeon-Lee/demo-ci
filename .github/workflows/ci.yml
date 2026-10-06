@@ -138,21 +138,22 @@ jobs:
           target: ~/service/demo-ci
           strip_components: 1
 
+      # appleboy 는 step env 의 PORT/HOST 등과 충돌할 수 있어,
+      # 원격에 넘길 값은 script 안에 직접 넣는다 (env/envs 미사용).
       - name: Pull image and restart container
         uses: appleboy/ssh-action@v1.2.0
-        env:
-          AWS_ACCESS_KEY_ID: ${{ secrets.AWS_ACCESS_KEY_ID }}
-          AWS_SECRET_ACCESS_KEY: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
-          AWS_REGION: ${{ secrets.AWS_REGION }}
-          IMAGE_REF: ${{ needs.docker.outputs.image_uri }}:${{ needs.docker.outputs.image_tag }}
         with:
           host: ${{ secrets.EC2_HOST }}
           username: ec2-user
           key: ${{ secrets.EC2_SSH_KEY }}
           port: ${{ secrets.EC2_PORT || 22 }}
-          envs: AWS_ACCESS_KEY_ID,AWS_SECRET_ACCESS_KEY,AWS_REGION,IMAGE_REF
           script: |
             set -euo pipefail
+
+            AWS_ACCESS_KEY_ID='${{ secrets.AWS_ACCESS_KEY_ID }}'
+            AWS_SECRET_ACCESS_KEY='${{ secrets.AWS_SECRET_ACCESS_KEY }}'
+            AWS_REGION='${{ secrets.AWS_REGION }}'
+            IMAGE_REF='${{ needs.docker.outputs.image_uri }}:${{ needs.docker.outputs.image_tag }}'
 
             # 이전 jar+systemd 방식과 충돌 방지
             if systemctl list-unit-files | grep -q '^demo-ci\.service'; then
