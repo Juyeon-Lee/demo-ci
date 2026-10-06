@@ -1,7 +1,15 @@
 spring:
   application:
     name: demo-ci
-
-# Docker 볼륨 마운트 경로(/app/data)와 맞춤. WORKDIR=/app 기준 data/
-app:
-  data-dir: ${APP_DATA_DIR:data}
+  datasource:
+    url: "${SPRING_DATASOURCE_URL:jdbc:mysql://127.0.0.1:3306/democi?useSSL=false&allowPublicKeyRetrieval=true&characterEncoding=UTF-8&serverTimezone=UTC}"
+    username: ${SPRING_DATASOURCE_USERNAME:democi}
+    password: ${SPRING_DATASOURCE_PASSWORD:democi}
+    hikari:
+      initialization-fail-timeout: 60000
+  jpa:
+    open-in-view: false
+    hibernate:
+      ddl-auto: update
+    properties:
+      hibernate.jdbc.time_zone: UTC

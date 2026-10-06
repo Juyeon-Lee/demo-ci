@@ -142,6 +142,7 @@ jobs:
           mkdir -p release
           cp deploy/application.yml release/application.yml
           cp deploy/env.conf release/env.conf
+          cp compose.yml release/compose.yml
           ls -la release
 
       - name: Ensure app directory on EC2
@@ -198,7 +199,17 @@ jobs:
 
             docker pull "${IMAGE_REF}"
 
-            # sample-server 와 같이 기존 컨테이너 강제 제거
+            if ! docker compose version >/dev/null 2>&1; then
+              mkdir -p "${HOME}/.docker/cli-plugins"
+              curl -fsSL "https://github.com/docker/compose/releases/download/v2.32.4/docker-compose-linux-$(uname -m)" \
+                -o "${HOME}/.docker/cli-plugins/docker-compose"
+              chmod +x "${HOME}/.docker/cli-plugins/docker-compose"
+            fi
+
+            cd /home/ec2-user/service/demo-ci
+            printf 'IMAGE_REF=%s\n' "${IMAGE_REF}" > .env
+
+            # 예전 docker run 컨테이너와 이름/포트가 겹치지 않게 제거
             docker rm -f demo-ci 2>/dev/null || true
 
             # 이름이 달라도 호스트 8080 을 쓰는 컨테이너가 있으면 제거
@@ -213,17 +224,20 @@ jobs:
               sleep 1
             fi
 
-            docker run -d \
-              --name demo-ci \
-              --restart unless-stopped \
-              -p 8080:8080 \
-              -v /home/ec2-user/service/demo-ci/data:/app/data \
-              -v /home/ec2-user/service/demo-ci/application.yml:/app/config/application.yml:ro \
-              --env-file /home/ec2-user/service/demo-ci/env.conf \
-              -e SPRING_CONFIG_ADDITIONAL_LOCATION=optional:file:/app/config/application.yml \
-              "${IMAGE_REF}"
+            # compose.yml: app + mysql, demo-net, mysql-data 볼륨
+            docker compose up -d --remove-orphans
 
-            sleep 3
-            docker ps --filter name=demo-ci --format 'table {{.Names}}\t{{.Status}}\t{{.Image}}'
+            ready=0
+            for _ in 1 2 3 4 5 6 7 8 9 10 11 12 13 14 15; do
+              if docker logs demo-ci 2>&1 | grep -q 'Started DemoCiApplication'; then
+                ready=1
+                break
+              fi
+              sleep 4
+            done
+            test "${ready}" = 1
+
+            docker compose ps
             docker inspect -f '{{.State.Running}}' demo-ci | grep -qx true
+            docker inspect -f '{{.State.Running}}' demo-ci-mysql | grep -qx true
             docker image prune -f

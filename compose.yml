@@ -1,0 +1,53 @@
+# 앱과 MySQL 을 같은 네트워크에 두고, 방문 기록은 mysql-data 볼륨에 남긴다.
+# IMAGE_REF 는 배포 시 서버의 .env 에서 읽는다.
+name: demo-ci
+
+services:
+  app:
+    image: ${IMAGE_REF}
+    container_name: demo-ci
+    restart: unless-stopped
+    depends_on:
+      mysql:
+        condition: service_healthy
+    ports:
+      - "8080:8080"
+    networks:
+      - demo-net
+    env_file:
+      - env.conf
+    environment:
+      SPRING_DATASOURCE_URL: "jdbc:mysql://mysql:3306/democi?useSSL=false&allowPublicKeyRetrieval=true&characterEncoding=UTF-8&serverTimezone=UTC"
+      SPRING_DATASOURCE_USERNAME: democi
+      SPRING_DATASOURCE_PASSWORD: democi
+    volumes:
+      - ./application.yml:/app/config/application.yml:ro
+
+  mysql:
+    image: mysql:8.4
+    container_name: demo-ci-mysql
+    restart: unless-stopped
+    networks:
+      - demo-net
+    environment:
+      MYSQL_DATABASE: democi
+      MYSQL_USER: democi
+      MYSQL_PASSWORD: democi
+      MYSQL_ROOT_PASSWORD: demociroot
+    volumes:
+      - mysql-data:/var/lib/mysql
+    healthcheck:
+      test: ["CMD", "mysqladmin", "ping", "-h", "127.0.0.1", "-uroot", "-pdemociroot"]
+      interval: 5s
+      timeout: 5s
+      retries: 30
+      start_period: 30s
+
+networks:
+  demo-net:
+    name: demo-net
+    driver: bridge
+
+volumes:
+  mysql-data:
+    name: demo-ci-mysql-data
