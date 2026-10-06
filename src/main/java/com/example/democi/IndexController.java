@@ -28,6 +28,6 @@ public class IndexController {
         long n = Long.parseLong(Files.readString(countFile, StandardCharsets.UTF_8).trim());
         n++;
         Files.writeString(countFile, Long.toString(n), StandardCharsets.UTF_8);
-        return "안녕하세요. 주연의 docker 학습용 페이지 입니다. 당신은 " + n + "번째 방문자입니다.";
+        return "안녕하세요. 주연의 docker 학습용 최종 페이지 입니다. 당신은 " + n + "번째 방문자입니다.";
     }
 }
