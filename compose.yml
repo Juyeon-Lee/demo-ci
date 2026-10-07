@@ -20,6 +20,7 @@ services:
       SPRING_DATASOURCE_URL: "jdbc:mysql://mysql:3306/democi?useSSL=false&allowPublicKeyRetrieval=true&characterEncoding=UTF-8&serverTimezone=UTC"
       SPRING_DATASOURCE_USERNAME: democi
       SPRING_DATASOURCE_PASSWORD: democi
+    mem_limit: 280m
     volumes:
       - ./application.yml:/app/config/application.yml:ro
 
@@ -27,6 +28,12 @@ services:
     image: mysql:8.4
     container_name: demo-ci-mysql
     restart: unless-stopped
+    # t3.micro(1GB) 기본 설정은 메모리를 거의 다 쓴다.
+    mem_limit: 450m
+    command:
+      - --innodb-buffer-pool-size=64M
+      - --performance-schema=OFF
+      - --max-connections=20
     networks:
       - demo-net
     environment:
