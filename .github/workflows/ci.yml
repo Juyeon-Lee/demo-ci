@@ -172,7 +172,8 @@ jobs:
           username: ec2-user
           key: ${{ secrets.EC2_SSH_KEY }}
           port: ${{ secrets.EC2_PORT || 22 }}
-          #command_timeout: 20m
+          # 정상 배포는 1~2분. 5분은 명령이 멈췄을 때의 상한이다.
+          command_timeout: 5m
           script: |
             set -euo pipefail
 
@@ -210,77 +211,35 @@ jobs:
             cd /home/ec2-user/service/demo-ci
             printf 'IMAGE_REF=%s\n' "${IMAGE_REF}" > .env
 
-            free_port_8080() {
-              id=""
-              for id in $(docker ps -q); do
-                if docker port "$id" 2>/dev/null | grep -qE ':8080([^0-9]|$)'; then
-                  echo "remove container on 8080: $(docker ps --filter "id=${id}" --format '{{.Names}}')"
-                  docker rm -f "$id" || true
-                fi
-              done
-
-              if command -v ss >/dev/null 2>&1; then
-                pids="$(sudo ss -tlnp | grep -E ':8080([^0-9]|$)' | grep -oE 'pid=[0-9]+' | cut -d= -f2 | sort -u || true)"
-                if [ -n "${pids}" ]; then
-                  echo "kill process on 8080: ${pids}"
-                  sudo ss -tlnp | grep -E ':8080([^0-9]|$)' || true
-                  sudo kill -9 ${pids} || true
-                fi
-              fi
-
-              if command -v fuser >/dev/null 2>&1; then
-                sudo fuser -k 8080/tcp || true
-              fi
-              sleep 1
-            }
-
-            stop_legacy_service() {
-              if systemctl list-unit-files | grep -q '^demo-ci\.service'; then
-                sudo systemctl stop demo-ci.service || true
-                sudo systemctl disable demo-ci.service || true
-              fi
-            }
-
-            # MySQL 이 healthy 된 뒤에야 앱이 8080 을 연다.
-            # 그 직전에 예전 컨테이너와 호스트 프로세스를 다시 비운다.
-            stop_legacy_service
+            # 앱 컨테이너를 내리면 8080 도 같이 빠진다.
+            docker compose stop app || true
             docker rm -f demo-ci 2>/dev/null || true
-            free_port_8080
+            sleep 3
 
-            docker compose up -d --remove-orphans mysql
+            docker compose up -d --remove-orphans --wait
 
-            mysql_status=""
-            i=0
-            while [ "$i" -lt 40 ]; do
-              mysql_status="$(docker inspect -f '{{if .State.Health}}{{.State.Health.Status}}{{else}}none{{end}}' demo-ci-mysql 2>/dev/null || true)"
-              if [ "$mysql_status" = "healthy" ]; then
-                break
-              fi
-              i=$((i + 1))
-              sleep 3
-            done
-            test "$mysql_status" = "healthy"
-
-            stop_legacy_service
-            docker rm -f demo-ci 2>/dev/null || true
-            free_port_8080
-
-            if ! docker compose up -d --remove-orphans app; then
-              echo "8080 is still in use"
-              sudo ss -tlnp | grep -E ':8080([^0-9]|$)' || true
-              docker ps -a --format 'table {{.Names}}\t{{.Status}}\t{{.Ports}}' || true
-              exit 1
-            fi
-
+            # docker logs | grep -q 는 패턴을 찾은 뒤에도 logs 가 파이프를 놓지 않아
+            # SSH 제한 시간까지 멈춘다. 로그를 변수로 받은 뒤에 확인한다.
             ready=0
-            for _ in 1 2 3 4 5 6 7 8 9 10 11 12 13 14 15; do
-              if docker logs demo-ci 2>&1 | grep -q 'Started DemoCiApplication'; then
+            i=0
+            while [ "$i" -lt 12 ]; do
+              logs="$(docker logs --tail 200 demo-ci 2>&1 || true)"
+              if printf '%s\n' "$logs" | grep -q 'Started DemoCiApplication'; then
                 ready=1
                 break
               fi
-              sleep 4
+              if printf '%s\n' "$logs" | grep -q 'APPLICATION FAILED TO START'; then
+                printf '%s\n' "$logs"
+                exit 1
+              fi
+              i=$((i + 1))
+              sleep 5
             done
-            test "${ready}" = 1
+            if [ "$ready" != 1 ]; then
+              echo "app did not finish starting"
+              printf '%s\n' "$logs"
+              exit 1
+            fi
 
             docker compose ps
             docker inspect -f '{{.State.Running}}' demo-ci | grep -qx true
