@@ -183,12 +183,6 @@ jobs:
             ECR_REGISTRY='${{ steps.image.outputs.ecr_registry }}'
             IMAGE_REF='${{ steps.image.outputs.image_ref }}'
 
-            # 이전 jar+systemd 방식과 충돌 방지
-            if systemctl list-unit-files | grep -q '^demo-ci\.service'; then
-              sudo systemctl stop demo-ci.service || true
-              sudo systemctl disable demo-ci.service || true
-            fi
-
             mkdir -p ~/.aws
             printf '%s\n' \
               '[default]' \
@@ -211,10 +205,14 @@ jobs:
             cd /home/ec2-user/service/demo-ci
             printf 'IMAGE_REF=%s\n' "${IMAGE_REF}" > .env
 
-            # 앱 컨테이너를 내리면 8080 도 같이 빠진다.
             docker compose stop app || true
             docker rm -f demo-ci 2>/dev/null || true
-            sleep 3
+
+            pid="$(sudo netstat -anp | grep ':8080' | awk '{print $NF}' | cut -d/ -f1 | head -n 1 || true)"
+            if [ -n "${pid}" ]; then
+              sudo kill "${pid}" || true
+            fi
+            sleep 2
 
             docker compose up -d --remove-orphans --wait
 
