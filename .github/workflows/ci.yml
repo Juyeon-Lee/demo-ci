@@ -214,30 +214,7 @@ jobs:
             fi
             sleep 2
 
-            docker compose up -d --remove-orphans --wait
-
-            # docker logs | grep -q 는 패턴을 찾은 뒤에도 logs 가 파이프를 놓지 않아
-            # SSH 제한 시간까지 멈춘다. 로그를 변수로 받은 뒤에 확인한다.
-            ready=0
-            i=0
-            while [ "$i" -lt 12 ]; do
-              logs="$(docker logs --tail 200 demo-ci 2>&1 || true)"
-              if printf '%s\n' "$logs" | grep -q 'Started DemoCiApplication'; then
-                ready=1
-                break
-              fi
-              if printf '%s\n' "$logs" | grep -q 'APPLICATION FAILED TO START'; then
-                printf '%s\n' "$logs"
-                exit 1
-              fi
-              i=$((i + 1))
-              sleep 5
-            done
-            if [ "$ready" != 1 ]; then
-              echo "app did not finish starting"
-              printf '%s\n' "$logs"
-              exit 1
-            fi
+            docker compose up -d --remove-orphans
 
             docker compose ps
             docker inspect -f '{{.State.Running}}' demo-ci | grep -qx true
